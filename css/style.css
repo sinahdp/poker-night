@@ -382,3 +382,19 @@ label.trow { cursor: pointer; }
 .act > :nth-child(3) { text-align: end; }
 .hst.res { border-top: 1px dashed var(--line); padding-top: 8px; }
 .nets { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 4px; font-size: .8125rem; color: var(--mut); }
+
+/* ───────────── ثبت دست‌به‌دست ───────────── */
+.rlist { display: flex; flex-direction: column; }
+.rrow { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.rrow:last-child { border-bottom: 0; }
+.rrow .pname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sgn {
+  flex: none; min-width: 64px; min-height: 44px; padding: 0 10px;
+  background: var(--s2); border: 1px solid var(--line); border-radius: var(--r-s);
+  font-size: .8125rem; font-weight: 600;
+}
+.sgn.loss { color: var(--red); }
+.sgn.win { background: var(--ac); border-color: var(--ac); color: var(--ac-ink); }
+.rrow input.in-sm { width: 110px; text-align: center; }
+.rrec { background: var(--s2); border: 1px solid var(--line); border-radius: var(--r); padding: 6px 12px 10px; }
+.rrec .ib { width: 34px; height: 34px; }

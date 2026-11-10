@@ -1,6 +1,6 @@
 // کش ساده برای کار کردن بدون اینترنت.
 // هر بار فایل‌ها عوض شد، عدد نسخه را بالا ببرید.
-const VERSION = 'poker-v2';
+const VERSION = 'poker-v3';
 const ASSETS = [
   './',
   'index.html',

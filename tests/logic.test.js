@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { settle, computePots, startHand, applyAction, resolveHand, turnInfo, parseAmount } from '../js/logic.js';
+import { settle, computePots, startHand, applyAction, resolveHand, turnInfo, parseAmount, resolveRound } from '../js/logic.js';
 
 const sumStacks = (h) => h.seats.reduce((a, s) => a + s.stack, 0);
 const P = (...stacks) => stacks.map((stack, i) => ({ id: 'p' + i, stack }));
@@ -193,4 +193,43 @@ test('حفظ مجموع چیپ‌ها در بازی تصادفی', () => {
     assert.equal(h.phase, 'done');
     assert.equal(sumStacks(h), total);
   }
+});
+
+test('resolveRound: سود برندهٔ خالی خودکار از جمع ضررها می‌آید', () => {
+  const r = resolveRound([
+    { id: 'a', amount: 30, win: false },
+    { id: 'b', amount: 15, win: false },
+    { id: 'c', amount: null, win: true },
+    { id: 'd', amount: null, win: false },
+  ]);
+  assert.equal(r.error, null);
+  assert.deepEqual(r.nets, { a: -30, b: -15, c: 45, d: 0 });
+});
+
+test('resolveRound: چند برندهٔ خالی مساوی (در واحد ۵) تقسیم می‌کنند', () => {
+  const r = resolveRound([
+    { id: 'a', amount: 55, win: false },
+    { id: 'b', amount: null, win: true },
+    { id: 'c', amount: null, win: true },
+  ]);
+  assert.equal(r.error, null);
+  assert.deepEqual(r.nets, { a: -55, b: 30, c: 25 });
+  assert.equal(Object.values(r.nets).reduce((x, y) => x + y, 0), 0);
+});
+
+test('resolveRound: سود نوشته‌شده + سود خودکار', () => {
+  const r = resolveRound([
+    { id: 'a', amount: 100, win: false },
+    { id: 'b', amount: 40, win: true },
+    { id: 'c', amount: null, win: true },
+  ]);
+  assert.equal(r.error, null);
+  assert.deepEqual(r.nets, { a: -100, b: 40, c: 60 });
+});
+
+test('resolveRound: خطاها', () => {
+  assert.match(resolveRound([{ id: 'a', amount: 12, win: false }, { id: 'b', amount: null, win: true }]).error, /مضرب/);
+  assert.ok(resolveRound([{ id: 'a', amount: 10, win: false }, { id: 'b', amount: 0, win: false }]).error); // برنده نیست
+  assert.ok(resolveRound([{ id: 'a', amount: 10, win: false }, { id: 'b', amount: 20, win: true }]).error); // سود بیشتر از ضرر
+  assert.ok(resolveRound([{ id: 'a', amount: null, win: false }, { id: 'b', amount: null, win: true }]).error); // خالی
 });

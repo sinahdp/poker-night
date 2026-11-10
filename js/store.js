@@ -1,6 +1,6 @@
 // وضعیت برنامه + ذخیره‌سازی در localStorage + عملیات روی بازی/دست
 
-import { settle, startHand, applyAction, resolveHand } from './logic.js';
+import { settle, startHand, applyAction, resolveHand, resolveRound } from './logic.js';
 
 const KEY = 'poker-night:v1';
 
@@ -11,7 +11,7 @@ function fresh() {
   return {
     v: 1,
     unit: 'تومان',
-    defaults: { buyIn: 500000, sb: 5000, bb: 10000 },
+    defaults: { buyIn: 500000, sb: 5000, bb: 10000, step: 5 },
     names: [],
     draft: { mode: 'ledger', players: [] },
     session: null,
@@ -78,7 +78,9 @@ export function draftRemove(id) {
 export function startSession() {
   const d = state.draft;
   if (d.players.length < 2) return 'حداقل دو بازیکن لازم است';
-  if (d.players.some((p) => p.buyIn <= 0)) return 'مبلغ خرید همه باید بیشتر از صفر باشد';
+  const rounds = d.mode === 'rounds';
+  if (!rounds && d.players.some((p) => p.buyIn <= 0)) return 'مبلغ خرید همه باید بیشتر از صفر باشد';
+  if (rounds && !(state.defaults.step > 0)) return 'مضرب اعداد را درست وارد کنید';
   if (d.mode === 'chips' && !(state.defaults.bb > 0 && state.defaults.sb > 0 && state.defaults.sb <= state.defaults.bb)) {
     return 'بلایندها را درست وارد کنید (اسمال ≤ بیگ)';
   }
@@ -86,7 +88,9 @@ export function startSession() {
     id: uid(),
     mode: d.mode,
     startedAt: Date.now(),
-    players: d.players.map((p) => ({ id: p.id, name: p.name, buyIns: [p.buyIn], stack: p.buyIn, out: false, cashOut: null })),
+    players: d.players.map((p) => ({ id: p.id, name: p.name, buyIns: [rounds ? 0 : p.buyIn], stack: rounds ? 0 : p.buyIn, out: false, cashOut: null })),
+    step: state.defaults.step,
+    rounds: [],
     sb: state.defaults.sb,
     bb: state.defaults.bb,
     dealerId: null,
@@ -142,9 +146,10 @@ export function addPlayerToSession(name, buyIn) {
   name = name.trim();
   if (!name) return 'نام را بنویسید';
   if (s.players.some((p) => p.name === name)) return 'این نام قبلاً هست';
-  if (buyIn <= 0) return 'مبلغ خرید را وارد کنید';
+  const rounds = s.mode === 'rounds';
+  if (!rounds && buyIn <= 0) return 'مبلغ خرید را وارد کنید';
   if (s.hand) return 'وسط دست نمی‌شود بازیکن اضافه کرد';
-  s.players.push({ id: uid(), name, buyIns: [buyIn], stack: buyIn, out: false, cashOut: null });
+  s.players.push({ id: uid(), name, buyIns: [rounds ? 0 : buyIn], stack: rounds ? 0 : buyIn, out: false, cashOut: null });
   if (!state.names.includes(name)) state.names.push(name);
   save();
   return null;
@@ -262,10 +267,30 @@ export function commitHand() {
   save();
 }
 
+/* ───────────── ثبت دست‌به‌دست (حالت rounds) ───────────── */
+
+/** rows: [{id, amount, win}] — نگاه کنید به resolveRound در logic.js */
+export function addRound(rows) {
+  const s = state.session;
+  const r = resolveRound(rows, s.step || 5);
+  if (r.error) return r.error;
+  s.rounds.push({ id: uid(), t: Date.now(), nets: r.nets });
+  save();
+  return null;
+}
+
+export function deleteRound(id) {
+  const s = state.session;
+  s.rounds = s.rounds.filter((r) => r.id !== id);
+  save();
+}
+
+export const roundTotal = (s, p) => sum((s.rounds || []).map((r) => r.nets[p.id] || 0));
+
 /* ───────────── تسویه ───────────── */
 
 export const totalIn = (p) => sum(p.buyIns);
-export const finalOf = (s, p) => (s.mode === 'chips' ? p.stack : p.cashOut);
+export const finalOf = (s, p) => (s.mode === 'chips' ? p.stack : s.mode === 'rounds' ? roundTotal(s, p) : p.cashOut);
 
 export function computeSettlement(s) {
   const rows = s.players.map((p) => {
@@ -293,8 +318,9 @@ export function finishSession() {
     startedAt: s.startedAt,
     mode: s.mode,
     unit: state.unit,
-    hands: s.handsPlayed,
+    hands: s.mode === 'rounds' ? s.rounds.length : s.handsPlayed,
     handLog: s.handLog || [],
+    rounds: (s.rounds || []).map((r, i) => ({ n: i + 1, nets: s.players.map((p) => ({ name: p.name, net: r.nets[p.id] || 0 })).filter((x) => x.net !== 0) })),
     players: c.rows.map((r) => ({ name: r.p.name, buyIn: r.inn, final: r.fin, net: r.net })),
     transfers: c.transfers.map((t) => ({ from: nameOf(t.from), to: nameOf(t.to), amount: t.amount, paid: false })),
   };

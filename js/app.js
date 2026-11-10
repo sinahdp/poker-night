@@ -1,4 +1,4 @@
-import { STREETS, fmt, parseAmount, turnInfo, potLabel } from './logic.js';
+import { STREETS, fmt, parseAmount, turnInfo, potLabel, resolveRound } from './logic.js';
 import * as S from './store.js';
 
 const { state } = S;
@@ -13,6 +13,7 @@ const ui = {
   sel: {}, // انتخاب برنده‌ها در شوداون
   selKey: null,
   focus: null,
+  round: {}, // پیش‌نویس ثبت یک دست: {pid: {v, win}}
 };
 
 /* ───────────── ابزارها ───────────── */
@@ -59,6 +60,7 @@ function setupView() {
   const d = state.draft;
   const df = state.defaults;
   const chips = d.mode === 'chips';
+  const rounds = d.mode === 'rounds';
   const free = state.names.filter((n) => !d.players.some((p) => p.name === n));
   const rows = d.players
     .map(
@@ -66,7 +68,7 @@ function setupView() {
     <div class="prow">
       <span class="seat-n">${toFa(i + 1)}</span>
       <b class="nm">${esc(p.name)}</b>
-      <input class="money in-sm" inputmode="numeric" autocomplete="off" data-bind="pBuyIn" data-id="${p.id}" value="${fmt(p.buyIn)}" aria-label="مبلغ خرید ${esc(p.name)}">
+      ${rounds ? '' : `<input class="money in-sm" inputmode="numeric" autocomplete="off" data-bind="pBuyIn" data-id="${p.id}" value="${fmt(p.buyIn)}" aria-label="مبلغ خرید ${esc(p.name)}">`}
       ${chips ? `<button class="ib" data-act="dMove" data-id="${p.id}" data-d="-1" aria-label="بالاتر">${icon('up')}</button><button class="ib" data-act="dMove" data-id="${p.id}" data-d="1" aria-label="پایین‌تر">${icon('down')}</button>` : ''}
       <button class="ib" data-act="dRemove" data-id="${p.id}" aria-label="حذف ${esc(p.name)}">${icon('x')}</button>
     </div>`,
@@ -80,6 +82,7 @@ function setupView() {
     <h2>نوع بازی</h2>
     <div class="modes" role="radiogroup">
       ${modeCard('ledger', 'دفترچه حساب', 'خرید و تسویهٔ آخر شب. دست‌ها را روی میز بازی می‌کنید و اپ فقط پول‌ها را حساب می‌کند.')}
+      ${modeCard('rounds', 'ثبت دست‌به‌دست', 'بعد از هر دست، ضرر هر نفر را فقط با یک عدد (مضرب ۵) وارد می‌کنید؛ سودِ برنده خودکار حساب می‌شود.')}
       ${modeCard('chips', 'چیپ مجازی', 'شرط‌ها، پات و برندهٔ هر دست را اپ نگه می‌دارد؛ پات فرعی و آل‌این هم حساب می‌شود.')}
     </div>
   </section>
@@ -87,8 +90,9 @@ function setupView() {
   <section class="card">
     <h2>مبلغ‌ها</h2>
     <div class="fields">
-      <label class="fld">خرید پیش‌فرض <small>برای بازیکن‌های تازه</small>
-        <input class="money" inputmode="numeric" autocomplete="off" data-bind="dBuyIn" value="${fmt(df.buyIn)}"></label>
+      ${rounds ? `<label class="fld">اعداد مضرب <small>هر عدد مضربی از این باشد</small>
+        <input class="money" inputmode="numeric" autocomplete="off" data-bind="dStep" value="${fmt(df.step)}"></label>` : `<label class="fld">خرید پیش‌فرض <small>برای بازیکن‌های تازه</small>
+        <input class="money" inputmode="numeric" autocomplete="off" data-bind="dBuyIn" value="${fmt(df.buyIn)}"></label>`}
       <label class="fld">واحد پول
         <input data-bind="unit" autocomplete="off" value="${esc(state.unit)}"></label>
       ${chips ? `
@@ -147,6 +151,77 @@ function ledgerView() {
       <button class="btn ghost danger" data-act="discard">لغو بازی</button>
     </div>
   </div>`;
+}
+
+/* ───────────── نمای ثبت دست‌به‌دست ───────────── */
+
+function roundsView() {
+  const s = sess();
+  const n = s.rounds.length;
+  const cards = s.players
+    .map(
+      (p) => `
+      <div class="card pcard">
+        <div class="between"><b class="pname">${esc(p.name)}</b><div class="amt">${signed(S.roundTotal(s, p))} <small>${unit()}</small></div></div>
+      </div>`,
+    )
+    .join('');
+  const list = [...s.rounds]
+    .map((r, i) => ({ r, i }))
+    .reverse()
+    .map(({ r, i }) => {
+      const nets = Object.entries(r.nets).filter(([, v]) => v !== 0).sort((a, b) => b[1] - a[1]);
+      return `<div class="rrec"><div class="between"><b>دست ${toFa(i + 1)}</b><button class="ib" data-act="delRound" data-id="${r.id}" aria-label="حذف دست ${toFa(i + 1)}">${icon('x')}</button></div>
+        <div class="nets">${nets.map(([id, v]) => `<span>${esc(pName(id))} ${signed(v)}</span>`).join('')}</div></div>`;
+    })
+    .join('');
+  return `
+  <header class="top">
+    <h1>ثبت دست‌به‌دست</h1><p class="sub">${toFa(n)} دست · ${dateFa(s.startedAt)}</p>
+  </header>
+  <button class="btn pri block lg" data-act="openRound">ثبت دست ${toFa(n + 1)}</button>
+  ${cards}
+  ${n ? `<section class="card"><h2>دست‌های ثبت‌شده <span class="count">${toFa(n)}</span></h2><div class="hlist">${list}</div></section>` : ''}
+  <div class="stack-btns">
+    <button class="btn block" data-act="openSettle">تسویه حساب پایان شب</button>
+    <div class="row2">
+      <button class="btn" data-act="openAddP">${icon('plus')}بازیکن جدید</button>
+      <button class="btn ghost danger" data-act="discard">لغو بازی</button>
+    </div>
+  </div>`;
+}
+
+/** ردیف‌های پیش‌نویس دست فعلی → ورودی resolveRound */
+function roundRows() {
+  return sess().players.map((p) => {
+    const d = ui.round[p.id] || {};
+    return { id: p.id, amount: d.v ? parseAmount(d.v) : null, win: !!d.win };
+  });
+}
+
+function roundDyn() {
+  const s = sess();
+  const r = resolveRound(roundRows(), s.step || 5);
+  const gain = r.win + Object.values(r.auto).reduce((a, b) => a + b, 0);
+  return `
+  <section class="card check ${r.error ? 'bad' : 'ok'}">
+    <div class="between"><span>جمع ضررها</span>${num(r.loss)}</div>
+    <div class="between"><span>جمع سودها</span>${num(gain)}</div>
+    <p class="msg">${r.error || 'حساب دست می‌خواند.'}</p>
+  </section>
+  <button class="btn pri block" data-act="doRound" ${r.error ? 'disabled' : ''}>ثبت دست ${toFa(s.rounds.length + 1)}</button>`;
+}
+
+function refreshRound() {
+  const s = sess();
+  if (!s || ui.sheet?.type !== 'round') return;
+  const r = resolveRound(roundRows(), s.step || 5);
+  for (const p of s.players) {
+    const el = document.querySelector(`[data-bind="rv"][data-id="${p.id}"]`);
+    if (el && ui.round[p.id]?.win) el.placeholder = r.auto[p.id] ? fmt(r.auto[p.id]) : 'خودکار';
+  }
+  const dyn = document.getElementById('round-dyn');
+  if (dyn) dyn.innerHTML = roundDyn();
 }
 
 /* ───────────── نمای چیپ مجازی: بین دست‌ها ───────────── */
@@ -337,15 +412,18 @@ function donePanel(h) {
 function settleView() {
   const s = sess();
   const c = S.computeSettlement(s);
-  const chips = s.mode === 'chips';
+  const rounds = s.mode === 'rounds';
+  const chips = s.mode !== 'ledger';
   const rows = c.rows
     .map((r) => {
-      const fin = chips
+      const fin = rounds
+        ? ''
+        : chips
         ? `<b class="num">${fmt(r.fin)}</b>`
         : `<input class="money in-sm" inputmode="numeric" autocomplete="off" placeholder="مبلغ پایان" data-bind="final" data-id="${r.p.id}" value="${r.fin == null ? '' : fmt(r.fin)}" aria-label="مبلغ پایانی ${esc(r.p.name)}">`;
       return `
       <div class="srow">
-        <div class="nm"><b>${esc(r.p.name)}</b><small class="mut">ورودی ${fmt(r.inn)}</small></div>
+        <div class="nm"><b>${esc(r.p.name)}</b>${rounds ? '' : `<small class="mut">ورودی ${fmt(r.inn)}</small>`}</div>
         <div class="fin">${fin}</div>
         <div class="net" data-net="${r.p.id}">${r.net == null ? '' : signed(r.net)}</div>
       </div>`;
@@ -355,10 +433,10 @@ function settleView() {
   <header class="top">
     <button class="back" data-act="closeSettle">${icon('back')}بازگشت به بازی</button>
     <h1>تسویه حساب</h1>
-    <p class="sub">${chips ? 'موجودی چیپ هر نفر به‌طور خودکار پایان حساب اوست.' : 'مبلغ پایانی هر نفر را وارد کنید (پولی که آخر شب مال اوست).'}</p>
+    <p class="sub">${rounds ? 'سود و زیان هر نفر از جمع دست‌های ثبت‌شده به‌دست آمده.' : chips ? 'موجودی چیپ هر نفر به‌طور خودکار پایان حساب اوست.' : 'مبلغ پایانی هر نفر را وارد کنید (پولی که آخر شب مال اوست).'}</p>
   </header>
   <section class="card">
-    <div class="shead"><span>بازیکن</span><span>${chips ? 'موجودی' : 'پایان'}</span><span>سود / زیان</span></div>
+    <div class="shead"><span>بازیکن</span><span>${rounds ? '' : chips ? 'موجودی' : 'پایان'}</span><span>سود / زیان</span></div>
     ${rows}
   </section>
   <div id="settle-dyn">${settleDyn(c)}</div>`;
@@ -366,7 +444,8 @@ function settleView() {
 
 function settleDyn(c) {
   const s = sess();
-  const chips = s.mode === 'chips';
+  const rounds = s.mode === 'rounds';
+  const chips = s.mode !== 'ledger';
   let msg;
   let cls = 'bad';
   let extra = '';
@@ -389,8 +468,8 @@ function settleDyn(c) {
     : '';
   return `
   <section class="card check ${cls}">
-    <div class="between"><span>جمع ورودی‌ها</span>${num(c.totalIn)}</div>
-    <div class="between"><span>جمع پایان</span>${num(c.totalFin)}</div>
+    ${rounds ? '' : `<div class="between"><span>جمع ورودی‌ها</span>${num(c.totalIn)}</div>
+    <div class="between"><span>جمع پایان</span>${num(c.totalFin)}</div>`}
     <p class="msg">${msg}</p>${extra}
   </section>
   ${c.balanced ? `<section class="card"><h2>چه کسی به چه کسی بدهد <span class="count">${toFa(c.transfers.length)}</span></h2>${tr}</section>` : ''}
@@ -444,6 +523,8 @@ async function shareOut(text) {
 
 /* ───────────── تاریخچه و آمار ───────────── */
 
+const modeName = (m) => (m === 'chips' ? 'چیپ مجازی' : m === 'rounds' ? 'ثبت دست‌به‌دست' : 'دفترچه حساب');
+
 function historyView() {
   if (ui.histId) return histDetailView();
   const list = state.history
@@ -453,7 +534,7 @@ function historyView() {
       return `
       <button class="card hitem" data-act="openHist" data-id="${h.id}">
         <div class="between"><b>${dateFa(h.date)}</b><span class="mut">${toFa(h.players.length)} نفر</span></div>
-        <div class="between sub-row"><span class="mut">${h.mode === 'chips' ? 'چیپ مجازی' : 'دفترچه حساب'}${h.hands ? ` · ${toFa(h.hands)} دست` : ''}</span>
+        <div class="between sub-row"><span class="mut">${modeName(h.mode)}${h.hands ? ` · ${toFa(h.hands)} دست` : ''}</span>
           <span>${top ? `برنده: <b>${esc(top.name)}</b> ${signed(top.net)}` : ''}</span></div>
         ${open ? `<div class="chip-open">${toFa(open)} بدهی تسویه‌نشده</div>` : ''}
       </button>`;
@@ -472,7 +553,7 @@ function histDetailView() {
   }
   const rows = [...h.players]
     .sort((a, b) => b.net - a.net)
-    .map((p) => `<div class="srow"><div class="nm"><b>${esc(p.name)}</b><small class="mut">ورودی ${fmt(p.buyIn)}</small></div><div class="fin"><b class="num">${fmt(p.final)}</b></div><div class="net">${signed(p.net)}</div></div>`)
+    .map((p) => `<div class="srow"><div class="nm"><b>${esc(p.name)}</b>${h.mode === 'rounds' ? '' : `<small class="mut">ورودی ${fmt(p.buyIn)}</small>`}</div><div class="fin">${h.mode === 'rounds' ? '' : `<b class="num">${fmt(p.final)}</b>`}</div><div class="net">${signed(p.net)}</div></div>`)
     .join('');
   const tr = h.transfers
     .map(
@@ -487,13 +568,14 @@ function histDetailView() {
   <header class="top">
     <button class="back" data-act="closeHist">${icon('back')}تاریخچه</button>
     <h1>${dateFa(h.date)}</h1>
-    <p class="sub">${h.mode === 'chips' ? 'چیپ مجازی' : 'دفترچه حساب'}${h.hands ? ` · ${toFa(h.hands)} دست` : ''} · واحد: ${esc(h.unit)}</p>
+    <p class="sub">${modeName(h.mode)}${h.hands ? ` · ${toFa(h.hands)} دست` : ''} · واحد: ${esc(h.unit)}</p>
   </header>
   <section class="card"><div class="shead"><span>بازیکن</span><span>پایان</span><span>سود / زیان</span></div>${rows}</section>
   <section class="card"><h2>تسویه <span class="count">${toFa(h.transfers.length)}</span></h2>
     ${tr || '<p class="empty">بدهی‌ای نیست.</p>'}
     ${h.transfers.length ? '<p class="hint">وقتی پرداخت شد، تیک بزنید.</p>' : ''}
   </section>
+  ${(h.rounds || []).length ? `<section class="card"><h2>دست‌ها <span class="count">${toFa(h.rounds.length)}</span></h2><div class="hlist">${[...h.rounds].reverse().map((r) => `<div class="rrec"><b>دست ${toFa(r.n)}</b><div class="nets">${[...r.nets].sort((a, b) => b.net - a.net).map((x) => `<span>${esc(x.name)} ${signed(x.net)}</span>`).join('')}</div></div>`).join('')}</div></section>` : ''}
   ${(h.handLog || []).length ? `<section class="card"><h2>دست‌ها <span class="count">${toFa(h.handLog.length)}</span></h2><div class="hlist">${[...h.handLog].reverse().map((r) => handRecHtml(r)).join('')}</div></section>` : ''}
   <div class="stack-btns">
     <button class="btn block" data-act="shareHist" data-id="${h.id}">${icon('share')}اشتراک‌گذاری</button>
@@ -602,6 +684,28 @@ function sheetHtml() {
       ${hist}
     </div>`;
   }
+  if (sh.type === 'round') {
+    const r = resolveRound(roundRows(), s.step || 5);
+    const rows = s.players
+      .map((p, i) => {
+        const d = ui.round[p.id] || {};
+        const ph = d.win ? (r.auto[p.id] ? fmt(r.auto[p.id]) : 'خودکار') : '۰';
+        return `<div class="rrow ${d.win ? 'win' : ''}">
+          <b class="pname">${esc(p.name)}</b>
+          <button type="button" class="sgn ${d.win ? 'win' : 'loss'}" data-act="rToggle" data-id="${p.id}" aria-pressed="${!!d.win}">${d.win ? 'برنده' : 'ضرر'}</button>
+          <input ${i === 0 ? 'id="sheet-amt"' : ''} class="money in-sm" inputmode="numeric" autocomplete="off" data-bind="rv" data-id="${p.id}" placeholder="${ph}" value="${d.v ? fmt(parseAmount(d.v)) : ''}" aria-label="${d.win ? 'سود' : 'ضرر'} ${esc(p.name)}">
+        </div>`;
+      })
+      .join('');
+    return `<div class="scrim" data-act="closeSheet"></div>
+    <div class="sheet tall" role="dialog" aria-label="ثبت دست">
+      <div class="grab"></div>
+      <div class="between"><h3>ثبت دست ${toFa(s.rounds.length + 1)}</h3><button class="ib" data-act="closeSheet" aria-label="بستن">${icon('x')}</button></div>
+      <p class="hint">ضرر هر نفر را بنویسید (مضرب ${toFa(s.step || 5)}). روی دکمهٔ نفر برنده بزنید تا «برنده» شود؛ اگر عددش را خالی بگذارید، سودش خودکار حساب می‌شود.</p>
+      <div class="rlist">${rows}</div>
+      <div id="round-dyn">${roundDyn()}</div>
+    </div>`;
+  }
   if (sh.type === 'hands') {
     const cur = s.hand ? S.buildHandRecord(s, s.hand, s.handsPlayed + 1) : null;
     const past = [...(s.handLog || [])].reverse();
@@ -621,7 +725,7 @@ function sheetHtml() {
       <form data-form="addP">
         <label class="fld">نام<input id="sheet-name" autocomplete="off" maxlength="24" enterkeyhint="next"></label>
         ${free.length ? `<div class="sugg">${free.map((n) => `<button type="button" class="tag" data-act="fillName" data-name="${esc(n)}">${esc(n)}</button>`).join('')}</div>` : ''}
-        <label class="fld">مبلغ خرید (${unit()})<input id="sheet-amt" class="money" inputmode="numeric" autocomplete="off" value="${fmt(state.defaults.buyIn)}"></label>
+        ${s.mode === 'rounds' ? '' : `<label class="fld">مبلغ خرید (${unit()})<input id="sheet-amt" class="money" inputmode="numeric" autocomplete="off" value="${fmt(state.defaults.buyIn)}"></label>`}
         <button class="btn pri block" type="submit">اضافه کن</button>
       </form>
     </div>`;
@@ -639,6 +743,7 @@ function render() {
   if (ui.tab === 'game') {
     if (!s) html = setupView();
     else if (ui.view === 'settle') html = settleView();
+    else if (s.mode === 'rounds') html = roundsView();
     else if (s.mode === 'chips') {
       if (s.hand) {
         html = handView();
@@ -756,6 +861,28 @@ const actions = {
     ui.sheet = { type: 'addp' };
     render();
   },
+  openRound() {
+    ui.round = {};
+    ui.sheet = { type: 'round' };
+    render();
+  },
+  rToggle(d) {
+    const cur = ui.round[d.id] || {};
+    ui.round[d.id] = { ...cur, win: !cur.win };
+    render();
+  },
+  doRound() {
+    if (fail(S.addRound(roundRows()))) return;
+    ui.sheet = null;
+    ui.round = {};
+    render();
+    toast('دست ثبت شد');
+  },
+  delRound(d) {
+    if (!confirm('این دست حذف شود؟')) return;
+    S.deleteRound(d.id);
+    render();
+  },
   openHands() {
     ui.sheet = { type: 'hands' };
     render();
@@ -771,7 +898,7 @@ const actions = {
   },
   fillName(d) {
     document.getElementById('sheet-name').value = d.name;
-    document.getElementById('sheet-amt').focus();
+    document.getElementById('sheet-amt')?.focus();
   },
   doBuy(d) {
     if (fail(S.addBuyIn(d.id, parseAmount(inputVal('sheet-amt'))))) return;
@@ -993,6 +1120,13 @@ document.addEventListener('input', (e) => {
     case 'unit':
       state.unit = el.value.trim() || 'تومان';
       break;
+    case 'dStep':
+      state.defaults.step = n;
+      break;
+    case 'rv':
+      ui.round[el.dataset.id] = { ...(ui.round[el.dataset.id] || {}), v: el.value };
+      refreshRound();
+      return;
     case 'dBuyIn':
       state.defaults.buyIn = n;
       break;

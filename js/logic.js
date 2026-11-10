@@ -17,6 +17,59 @@ export function parseAmount(s) {
 
 export const fmt = (n) => Math.round(n).toLocaleString('en-US');
 
+/* ───────────── ثبت نتیجهٔ دست‌به‌دست ───────────── */
+
+/**
+ * rows: [{id, amount: عدد|null, win: بولین}] — برای هر نفر فقط یک عدد.
+ *  - ردیف عادی (win=false) = ضرر آن نفر در این دست.
+ *  - ردیف برنده (win=true) = سود. اگر عددش خالی باشد، مابقی (جمع ضررها − سودهای نوشته‌شده)
+ *    به‌طور خودکار به او می‌رسد؛ اگر چند برندهٔ خالی باشد به‌طور مساوی (در واحد step) تقسیم می‌شود.
+ * همهٔ عددها باید مضرب step باشند. خروجی: {nets:{id:net}, auto:{id:سودخودکار}, loss, win, error}
+ */
+export function resolveRound(rows, step = 5) {
+  const nets = {};
+  const auto = {};
+  let loss = 0;
+  let win = 0;
+  const autoIds = [];
+  let error = null;
+  for (const r of rows) {
+    const a = r.amount || 0;
+    if (a % step !== 0) error = error || `عددها باید مضرب ${step} باشند`;
+    if (r.win) {
+      if (a > 0) {
+        nets[r.id] = a;
+        win += a;
+      } else {
+        nets[r.id] = 0;
+        autoIds.push(r.id);
+      }
+    } else {
+      nets[r.id] = a ? -a : 0;
+      loss += a;
+    }
+  }
+  const rest = loss - win;
+  if (!error) {
+    if (loss === 0 && win === 0) error = 'هیچ عددی وارد نشده';
+    else if (rest < 0) error = 'جمع سودها از جمع ضررها بیشتر است';
+    else if (!autoIds.length && rest > 0) error = 'برنده را مشخص کنید';
+    else if (autoIds.length && rest % step !== 0) error = `عددها باید مضرب ${step} باشند`;
+  }
+  if (autoIds.length && rest > 0) {
+    const units = Math.floor(rest / step);
+    const base = Math.floor(units / autoIds.length);
+    let extra = units - base * autoIds.length;
+    for (const id of autoIds) {
+      const share = (base + (extra > 0 ? 1 : 0)) * step;
+      if (extra > 0) extra--;
+      auto[id] = share;
+      nets[id] = share;
+    }
+  }
+  return { nets, auto, loss, win, rest, error };
+}
+
 /* ───────────── تسویه حساب ───────────── */
 
 /**
