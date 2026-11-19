@@ -1,7 +1,31 @@
 ﻿import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseAmount, resolveRound, settle, netOf, withdrawalLimit, tablePositions } from '../js/logic.js';
+import { parseAmount, parseMoney, moneyInput, stepLoss, resolveRound, settle, netOf, withdrawalLimit, tablePositions } from '../js/logic.js';
 const players = () => ['a', 'b', 'c'].map(id => ({ id, name: id, stack: 100000, buyIns: [100000], withdrawals: [] }));
+test('short and full amounts resolve identically in Persian, Arabic and English', () => {
+  for (const text of ['10', '۱۰', '١٠', '10000', '۱۰٬۰۰۰', '10,000']) assert.equal(parseMoney(text), 10000);
+  for (const text of ['5', '۵', '5000', '۵۰۰۰']) assert.equal(parseMoney(text), 5000);
+  assert.equal(parseMoney('۱'), 1000);
+  assert.equal(parseMoney('۱۰۰۰'), 1000);
+  assert.equal(parseMoney('۹۹۹'), 999000);
+  assert.equal(parseMoney('0'), 0);
+});
+test('precise short amounts and generated inputs round-trip without multiplying again', () => {
+  assert.equal(parseMoney('۵٫۰۰۱'), 5001);
+  for (const amount of [0, 1, 999, 1000, 5001, 999999, 1000000, 1200000]) assert.equal(parseMoney(moneyInput(amount)), amount);
+});
+test('invalid short amounts never become silent losses', () => {
+  for (const text of ['', '-5', '1e3', '5foo', '1.0001', '1000.5', 'Infinity', '9007199254740992']) assert.ok(Number.isNaN(parseMoney(text)), text);
+});
+test('five-thousand steps work with either input format and clamp to available balance', () => {
+  assert.equal(stepLoss('', 1, 100000), 5000);
+  assert.equal(stepLoss('۱۰', 1, 100000), 15000);
+  assert.equal(stepLoss('10000', -1, 100000), 5000);
+  assert.equal(stepLoss('2', -1, 100000), 0);
+  assert.equal(stepLoss('10', 1, 12001), 12001);
+  assert.equal(stepLoss('0', -1, 100000), 0);
+  assert.throws(() => stepLoss('bad', 1, 100000));
+});
 test('Persian/Arabic whole tomans; invalid and unsafe input rejected', () => {
   assert.equal(parseAmount('۱٬۵۰۰,۰۰۰'), 1500000);
   assert.equal(parseAmount('٢٥'), 25);

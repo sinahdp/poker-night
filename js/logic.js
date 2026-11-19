@@ -6,6 +6,20 @@ export function parseAmount(value) {
   const text = normalizeDigits(value).replace(/[,٬\s]/g, '');
   return /^\d+$/.test(text) && Number.isSafeInteger(Number(text)) ? Number(text) : NaN;
 }
+// Short amounts are thousands of tomans; full amounts remain valid.
+export function parseMoney(value) {
+  const text = normalizeDigits(value).replace(/[,٬\s]/g, '').replace(/٫/g, '.');
+  if (!/^(?:\d+)(?:\.\d{1,3})?$/.test(text)) return NaN;
+  const n = Number(text);
+  const amount = n < 1000 ? Math.round(n * 1000) : n;
+  return Number.isSafeInteger(amount) && (n < 1000 || !text.includes('.')) ? amount : NaN;
+}
+export const moneyInput = amount => String(amount < 1000000 ? amount / 1000 : amount);
+export function stepLoss(value, direction, limit) {
+  const amount = String(value).trim() ? parseMoney(value) : 0;
+  if (!Number.isSafeInteger(amount)) throw new Error('ابتدا مبلغ را درست وارد کنید');
+  return Math.min(limit, Math.max(0, amount + direction * 5000));
+}
 export const fmt = n => n.toLocaleString('fa-IR');
 export const totalIn = p => p.buyIns.reduce((a, b) => a + b, 0);
 export const totalOut = p => (p.withdrawals || []).reduce((a, b) => a + b, 0);

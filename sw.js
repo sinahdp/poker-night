@@ -1,4 +1,4 @@
-﻿const VERSION = 'poker-simple-v4';
+﻿const VERSION = 'poker-red-v5';
 const ASSETS = ['./', 'index.html', 'css/style.css', 'js/app.js', 'js/logic.js', 'js/store.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'fonts/PeydaWebFaNum-Regular.woff2', 'fonts/PeydaWebFaNum-SemiBold.woff2'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));

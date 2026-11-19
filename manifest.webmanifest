@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "شب پوکر",
   "short_name": "شب پوکر",
   "description": "حساب‌وکتاب پوکر حضوری با دوستان",
@@ -8,8 +8,8 @@
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#0d1210",
-  "theme_color": "#0d1210",
+  "background_color": "#100e11",
+  "theme_color": "#100e11",
   "icons": [
     { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
