@@ -1,359 +1,88 @@
-// وضعیت برنامه + ذخیره‌سازی در localStorage + عملیات روی بازی/دست
-
-import { settle, startHand, applyAction, resolveHand, resolveRound } from './logic.js';
-
-const KEY = 'poker-night:v1';
-
-export const uid = () => Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-3);
-export const sum = (a) => a.reduce((x, y) => x + y, 0);
-
-function fresh() {
-  return {
-    v: 1,
-    unit: 'تومان',
-    defaults: { buyIn: 500000, sb: 5000, bb: 10000, step: 5 },
-    names: [],
-    draft: { mode: 'ledger', players: [] },
-    session: null,
-    history: [],
-  };
-}
-
+﻿import { totalIn, totalOut, netOf, withdrawalLimit, tablePositions, resolveRound, settle } from './logic.js';
+const KEY = 'poker-night:simple:v2';
+const uid = () => globalThis.crypto.randomUUID();
+const fresh = () => ({ v: 2, draft: { names: [], buyIn: 100000 }, session: null, history: [] });
 function load() {
-  const base = fresh();
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) {
-      const s = JSON.parse(raw);
-      if (s && s.v === 1) return { ...base, ...s, defaults: { ...base.defaults, ...s.defaults }, draft: { ...base.draft, ...s.draft } };
+    if (raw) return JSON.parse(raw);
+    const old = JSON.parse(localStorage.getItem('poker-night:v1') || 'null');
+    const next = fresh();
+    if (!old) return next;
+    // Original v1 storage remains intact, including unfinished virtual hands.
+    next.history = old.history || [];
+    next.draft.names = (old.draft?.players || []).map(p => p.name);
+    next.draft.buyIn = old.defaults?.buyIn || 100000;
+    const s = old.session;
+    if (s) {
+      const buyIn = s.players[0]?.buyIns?.[0] || next.draft.buyIn;
+      const players = s.players.map(p => {
+        const profit = (s.rounds || []).reduce((n, r) => n + (r.nets[p.id] || 0), 0);
+        return { id: p.id, name: p.name, buyIns: s.mode === 'rounds' ? [buyIn] : p.buyIns, withdrawals: [], stack: s.mode === 'rounds' ? buyIn + profit : s.mode === 'chips' ? p.stack : p.buyIns.reduce((a, b) => a + b, 0) };
+      });
+      if (players.every(p => p.stack >= 0)) next.session = { id: s.id, startedAt: s.startedAt, buyIn, players, dealerId: s.dealerId || players[0].id, rounds: s.rounds || [], movements: [], endedAt: null };
+      else next.migrationWarning = 'بازی قبلی موجودی منفی دارد؛ اطلاعات اصلی محفوظ است. برای ادامهٔ آن از نسخهٔ قبلی استفاده کنید.';
     }
-  } catch (e) {
-    /* خراب بود؛ از نو شروع می‌کنیم */
-  }
-  return base;
+    return next;
+  } catch { return fresh(); }
 }
-
 export const state = load();
-
-export function save() {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(state));
-  } catch (e) {
-    /* حافظه پر یا حالت خصوصی */
-  }
+export function persist() {
+  try { localStorage.setItem(KEY, JSON.stringify(state)); }
+  catch { throw new Error('ذخیره روی این دستگاه ممکن نیست؛ فضای مرورگر یا تنظیمات ذخیره‌سازی را بررسی کنید'); }
 }
-
-export function replaceState(obj) {
-  const base = fresh();
-  for (const k of Object.keys(state)) delete state[k];
-  Object.assign(state, base, obj, { defaults: { ...base.defaults, ...(obj.defaults || {}) } });
-  save();
+function change(update) {
+  const before = structuredClone(state);
+  try { update(); persist(); }
+  catch (error) { Object.keys(state).forEach(k => delete state[k]); Object.assign(state, before); throw error; }
 }
-
-/* ───────────── پیش‌نویس شروع بازی ───────────── */
-
-export function draftAdd(name) {
-  name = name.trim();
-  if (!name) return 'نام را بنویسید';
-  if (state.draft.players.some((p) => p.name === name)) return 'این نام قبلاً اضافه شده';
-  state.draft.players.push({ id: uid(), name, buyIn: state.defaults.buyIn });
-  save();
-  return null;
-}
-
-export function draftMove(id, d) {
-  const a = state.draft.players;
-  const i = a.findIndex((p) => p.id === id);
-  const j = i + d;
-  if (i < 0 || j < 0 || j >= a.length) return;
-  [a[i], a[j]] = [a[j], a[i]];
-  save();
-}
-
-export function draftRemove(id) {
-  state.draft.players = state.draft.players.filter((p) => p.id !== id);
-  save();
-}
-
-export function startSession() {
-  const d = state.draft;
-  if (d.players.length < 2) return 'حداقل دو بازیکن لازم است';
-  const rounds = d.mode === 'rounds';
-  if (!rounds && d.players.some((p) => p.buyIn <= 0)) return 'مبلغ خرید همه باید بیشتر از صفر باشد';
-  if (rounds && !(state.defaults.step > 0)) return 'مضرب اعداد را درست وارد کنید';
-  if (d.mode === 'chips' && !(state.defaults.bb > 0 && state.defaults.sb > 0 && state.defaults.sb <= state.defaults.bb)) {
-    return 'بلایندها را درست وارد کنید (اسمال ≤ بیگ)';
-  }
-  state.session = {
-    id: uid(),
-    mode: d.mode,
-    startedAt: Date.now(),
-    players: d.players.map((p) => ({ id: p.id, name: p.name, buyIns: [rounds ? 0 : p.buyIn], stack: rounds ? 0 : p.buyIn, out: false, cashOut: null })),
-    step: state.defaults.step,
-    rounds: [],
-    sb: state.defaults.sb,
-    bb: state.defaults.bb,
-    dealerId: null,
-    nextDealerId: null,
-    hand: null,
-    handUndo: [],
-    handsPlayed: 0,
-    handLog: [],
-    lastResult: null,
-  };
-  for (const p of d.players) if (!state.names.includes(p.name)) state.names.push(p.name);
-  state.draft.players = [];
-  save();
-  return null;
-}
-
-export function discardSession() {
-  state.session = null;
-  save();
-}
-
-/* ───────────── خرید و بازیکن (هر دو حالت) ───────────── */
-
-export function addBuyIn(pid, amount) {
-  const s = state.session;
-  const p = s.players.find((x) => x.id === pid);
-  if (!p || amount <= 0) return 'مبلغ را وارد کنید';
-  if (s.hand) return 'وسط دست نمی‌شود خرید ثبت کرد';
-  p.buyIns.push(amount);
-  p.stack += amount;
-  p.out = false;
-  save();
-  return null;
-}
-
-export function removeBuyIn(pid, idx) {
-  const s = state.session;
-  const p = s.players.find((x) => x.id === pid);
-  if (!p || p.buyIns.length <= 1) return 'حداقل یک خرید باید بماند';
-  const a = p.buyIns[idx];
-  if (s.mode === 'chips') {
-    if (s.hand) return 'وسط دست ممکن نیست';
-    if (p.stack - a < 0) return 'موجودی این بازیکن از این خرید کمتر است';
-    p.stack -= a;
-  }
-  p.buyIns.splice(idx, 1);
-  save();
-  return null;
-}
-
-export function addPlayerToSession(name, buyIn) {
-  const s = state.session;
-  name = name.trim();
-  if (!name) return 'نام را بنویسید';
-  if (s.players.some((p) => p.name === name)) return 'این نام قبلاً هست';
-  const rounds = s.mode === 'rounds';
-  if (!rounds && buyIn <= 0) return 'مبلغ خرید را وارد کنید';
-  if (s.hand) return 'وسط دست نمی‌شود بازیکن اضافه کرد';
-  s.players.push({ id: uid(), name, buyIns: [rounds ? 0 : buyIn], stack: rounds ? 0 : buyIn, out: false, cashOut: null });
-  if (!state.names.includes(name)) state.names.push(name);
-  save();
-  return null;
-}
-
-export function toggleOut(pid) {
-  const p = state.session.players.find((x) => x.id === pid);
-  if (p) p.out = !p.out;
-  save();
-}
-
-/* ───────────── دست‌ها (حالت چیپ مجازی) ───────────── */
-
-export const participants = (s) => s.players.filter((p) => !p.out && p.stack > 0);
-
-export function nextDealerId(s) {
-  const part = participants(s);
-  if (part.length < 2) return null;
-  if (s.nextDealerId && part.some((p) => p.id === s.nextDealerId)) return s.nextDealerId;
-  const order = s.players;
-  const start = order.findIndex((p) => p.id === s.dealerId);
-  for (let k = 1; k <= order.length; k++) {
-    const p = order[(start + k + order.length) % order.length];
-    if (part.some((x) => x.id === p.id)) return p.id;
-  }
-  return part[0].id;
-}
-
-export function beginHand() {
-  const s = state.session;
-  const part = participants(s);
-  if (part.length < 2) return 'حداقل دو بازیکن با موجودی لازم است';
-  if (!(s.bb > 0 && s.sb > 0 && s.sb <= s.bb)) return 'بلایندها را درست وارد کنید';
-  const did = nextDealerId(s);
-  const dealer = part.findIndex((p) => p.id === did);
-  s.hand = startHand({ players: part.map((p) => ({ id: p.id, stack: p.stack })), dealer, sb: s.sb, bb: s.bb });
-  s.handUndo = [];
-  s.dealerId = did;
-  s.nextDealerId = null;
-  s.lastResult = null;
-  save();
-  return null;
-}
-
-export function doAction(action) {
-  const s = state.session;
-  const next = applyAction(s.hand, action);
-  s.handUndo.push(s.hand);
-  s.hand = next;
-  save();
-}
-
-export function confirmWinners(winners) {
-  const s = state.session;
-  const next = resolveHand(s.hand, winners);
-  s.handUndo.push(s.hand);
-  s.hand = next;
-  save();
-}
-
-export function undoHand() {
-  const s = state.session;
-  if (!s.handUndo.length) return;
-  s.hand = s.handUndo.pop();
-  save();
-}
-
-export function cancelHand() {
-  const s = state.session;
-  s.hand = null;
-  s.handUndo = [];
-  save();
-}
-
-/** خلاصهٔ قابل ذخیرهٔ یک دست (با نام‌ها، نه شناسه‌ها). برای دست نیمه‌کاره هم کار می‌کند. */
-export function buildHandRecord(s, h, n) {
-  const nm = (id) => s.players.find((p) => p.id === id)?.name ?? '؟';
-  const done = h.phase === 'done';
-  return {
-    n,
-    done,
-    sb: h.sb,
-    bb: h.bb,
-    dealer: nm(h.seats[h.dealer].id),
-    sbName: nm(h.seats[h.sbIdx].id),
-    bbName: nm(h.seats[h.bbIdx].id),
-    sbAmt: Math.min(h.seats[h.sbIdx].start, h.sb),
-    bbAmt: Math.min(h.seats[h.bbIdx].start, h.bb),
-    street: h.street,
-    pot: sum(h.seats.map((x) => x.committed)),
-    players: h.seats.map((x) => ({ name: nm(x.id), start: x.start, end: done ? x.stack : null })),
-    actions: h.log.map((e) => ({ name: nm(e.id), type: e.type, amount: e.amount, street: e.street, allIn: !!e.allIn })),
-    pots: done ? h.result.pots.map((p) => ({ amount: p.amount, winners: p.winners.map((w) => ({ name: nm(h.seats[w.idx].id), amount: w.amount })) })) : null,
-  };
-}
-
-export function commitHand() {
-  const s = state.session;
-  const h = s.hand;
-  if (!h || h.phase !== 'done') return;
-  const lines = [];
-  h.seats.forEach((seat, i) => {
-    const p = s.players.find((x) => x.id === seat.id);
-    p.stack = seat.stack;
-    const net = h.result.net[i].net;
-    if (net !== 0) lines.push({ name: p.name, net });
+export function saveDraft(names, buyIn) { change(() => { state.draft = { names, buyIn }; }); }
+export function startSession(names, buyIn) {
+  if (state.session) throw new Error('ابتدا بازی فعلی را تمام کنید');
+  names = names.map(n => n.trim()).filter(Boolean);
+  if (names.length < 2) throw new Error('حداقل دو بازیکن وارد کنید');
+  if (new Set(names).size !== names.length) throw new Error('نام بازیکن‌ها تکراری است');
+  if (!Number.isSafeInteger(buyIn) || buyIn < 2000) throw new Error('ورودی باید حداقل ۲٬۰۰۰ تومان باشد');
+  change(() => {
+    const players = names.map(name => ({ id: uid(), name, buyIns: [buyIn], withdrawals: [], stack: buyIn }));
+    state.session = { id: uid(), startedAt: Date.now(), buyIn, players, dealerId: players[0].id, rounds: [], movements: [], endedAt: null };
+    state.draft = { names, buyIn };
   });
-  lines.sort((a, b) => b.net - a.net);
-  s.handLog = s.handLog || [];
-  s.handLog.push(buildHandRecord(s, h, s.handsPlayed + 1));
-  s.handsPlayed++;
-  s.lastResult = { hand: s.handsPlayed, lines };
-  s.hand = null;
-  s.handUndo = [];
-  save();
 }
-
-/* ───────────── ثبت دست‌به‌دست (حالت rounds) ───────────── */
-
-/** rows: [{id, amount, win}] — نگاه کنید به resolveRound در logic.js */
+function activeSession() {
+  if (!state.session || state.session.endedAt) throw new Error('بازی فعالی وجود ندارد');
+  return state.session;
+}
 export function addRound(rows) {
-  const s = state.session;
-  const r = resolveRound(rows, s.step || 5);
-  if (r.error) return r.error;
-  s.rounds.push({ id: uid(), t: Date.now(), nets: r.nets });
-  save();
-  return null;
-}
-
-export function deleteRound(id) {
-  const s = state.session;
-  s.rounds = s.rounds.filter((r) => r.id !== id);
-  save();
-}
-
-export const roundTotal = (s, p) => sum((s.rounds || []).map((r) => r.nets[p.id] || 0));
-
-/* ───────────── تسویه ───────────── */
-
-export const totalIn = (p) => sum(p.buyIns);
-export const finalOf = (s, p) => (s.mode === 'chips' ? p.stack : s.mode === 'rounds' ? roundTotal(s, p) : p.cashOut);
-
-export function computeSettlement(s) {
-  const rows = s.players.map((p) => {
-    const inn = totalIn(p);
-    const fin = finalOf(s, p);
-    return { p, inn, fin, net: fin == null ? null : fin - inn };
+  const s = activeSession(), positions = tablePositions(s);
+  if (!positions) throw new Error('حداقل دو بازیکن با موجودی لازم است');
+  const result = resolveRound(s.players, rows, positions.dealer.id);
+  change(() => {
+    s.rounds.push({ id: uid(), t: Date.now(), ...result, dealerId: positions.dealer.id, smallId: positions.small.id, bigId: positions.big.id });
+    delete state.roundDraft;
+    s.players.forEach(p => { p.stack += result.nets[p.id]; });
+    const index = s.players.findIndex(p => p.id === positions.dealer.id);
+    s.dealerId = s.players[(index + 1) % s.players.length].id;
   });
-  const missing = rows.filter((r) => r.fin == null);
-  const totalInAll = sum(rows.map((r) => r.inn));
-  const totalFin = sum(rows.map((r) => r.fin ?? 0));
-  const diff = totalFin - totalInAll; // مثبت: پایان بیشتر از ورودی
-  const balanced = missing.length === 0 && diff === 0;
-  const transfers = balanced ? settle(rows.map((r) => ({ id: r.p.id, amount: r.net }))) : [];
-  return { rows, missing, totalIn: totalInAll, totalFin, diff, balanced, transfers };
+  return result;
 }
-
+export function rebuy(id) {
+  const s = activeSession(), p = s.players.find(p => p.id === id);
+  if (!p || p.stack !== 0) throw new Error('شارژ فقط وقتی موجودی صفر است انجام می‌شود');
+  if (!Number.isSafeInteger(totalIn(p) + s.buyIn)) throw new Error('مجموع شارژ بیش از حد بزرگ است');
+  change(() => { p.buyIns.push(s.buyIn); p.stack = s.buyIn; s.movements.push({ id, type: 'rebuy', amount: s.buyIn, t: Date.now() }); });
+}
+export function withdraw(id, amount) {
+  const s = activeSession(), p = s.players.find(p => p.id === id);
+  if (!p || !Number.isSafeInteger(amount) || amount <= 0 || amount > withdrawalLimit(s, p)) throw new Error('فقط موجودی اضافه بر ورودی اولیه قابل برداشت است');
+  change(() => { p.stack -= amount; p.withdrawals.push(amount); s.movements.push({ id, type: 'withdraw', amount, t: Date.now() }); });
+}
+export function summary(s) {
+  const rows = s.players.map(p => ({ ...p, inn: totalIn(p), out: totalOut(p), net: netOf(p) }));
+  return { rows, transfers: settle(rows.map(p => ({ id: p.id, amount: p.net }))) };
+}
 export function finishSession() {
-  const s = state.session;
-  const c = computeSettlement(s);
-  if (!c.balanced) return null;
-  const nameOf = (id) => s.players.find((p) => p.id === id).name;
-  const entry = {
-    id: uid(),
-    date: Date.now(),
-    startedAt: s.startedAt,
-    mode: s.mode,
-    unit: state.unit,
-    hands: s.mode === 'rounds' ? s.rounds.length : s.handsPlayed,
-    handLog: s.handLog || [],
-    rounds: (s.rounds || []).map((r, i) => ({ n: i + 1, nets: s.players.map((p) => ({ name: p.name, net: r.nets[p.id] || 0 })).filter((x) => x.net !== 0) })),
-    players: c.rows.map((r) => ({ name: r.p.name, buyIn: r.inn, final: r.fin, net: r.net })),
-    transfers: c.transfers.map((t) => ({ from: nameOf(t.from), to: nameOf(t.to), amount: t.amount, paid: false })),
-  };
-  state.history.unshift(entry);
-  state.session = null;
-  save();
-  return entry;
-}
-
-export function deleteHistory(id) {
-  state.history = state.history.filter((h) => h.id !== id);
-  save();
-}
-
-export function togglePaid(hid, idx) {
-  const h = state.history.find((x) => x.id === hid);
-  if (h && h.transfers[idx]) h.transfers[idx].paid = !h.transfers[idx].paid;
-  save();
-}
-
-/* ───────────── آمار ───────────── */
-
-export function leaderboard() {
-  const m = new Map();
-  for (const h of state.history) {
-    for (const p of h.players) {
-      const r = m.get(p.name) || { name: p.name, nights: 0, net: 0, best: -Infinity, worst: Infinity };
-      r.nights++;
-      r.net += p.net;
-      r.best = Math.max(r.best, p.net);
-      r.worst = Math.min(r.worst, p.net);
-      m.set(p.name, r);
-    }
-  }
-  return [...m.values()].sort((a, b) => b.net - a.net);
+  const s = activeSession();
+  summary(s);
+  change(() => { s.endedAt = Date.now(); state.history.unshift(structuredClone(s)); state.session = null; });
 }
